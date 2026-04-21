@@ -1,0 +1,306 @@
+   10 REM>FlashRomS5
+   20
+   30 PROCassemble
+   40
+   50 REM Probably shouldn't be writing to other podules,
+   60 REM but we are going to reset after writing, so
+   70 REM shouldn't cause any issue
+   80 FOR n%=0 TO 3
+   90 Offset%=&03340000+(n%*&4000):Latch%=Offset%+&2000
+  100 ID%=FNreadid(0)
+  110 PRINT"Podule ";n%;" Chip ID ";~ID%;
+  120 IF ID% >=&bfb5 AND (ID% <= &bfb7) PRINT" ** 39SF0x0";: REM 39SF010/020/040?
+  130 IF ID% >=&c2a4 AND (ID% <= &c2a4) PRINT" ** 29F040";
+  140 PRINT
+  150 NEXT
+  160
+  170
+  180 INPUT "Podule",pod%
+  190 Offset%=&03340000+(pod%*&4000)
+  200 PRINT"Address ";~Offset%
+  210 Latch%=Offset%+&2000
+  220 Page%=2*1024
+  230
+  240 ID%=FNreadid(0)
+  250 sug%=-1
+  260 FullRamSize%=0
+  270 REM SST39sf0x0
+  280 IF (ID% >= &bfb5) AND (ID% <= &bfb7) THEN
+  290 sug%=(ID%-&bfb5)
+  300 ENDIF
+  310 REM 29F040
+  320 IF (ID% = &c2a4) THEN
+  330 sug%=2 : REM 512K
+  340 ENDIF
+  350 IF sug%>=0 THEN
+  360 PRINT "Chip is ";(2^sug%)*128;"KB (though less may be visible if jumpers are set)"
+  370 FullRamSize%=(2^sug%)*128
+  380 ENDIF
+  390
+  400 INPUT"Rom Size (K)",RomKB%
+  410 IF RomKB%=0 RomKB%=FullRamSize%
+  420 RomSize% = RomKB% * 1024
+  430 PRINT"Rom Size - ";RomKB%;"K"
+  440 Pages%=RomSize%/Page%
+  450 DIM rom% RomSize%
+  460 DIM rawsector% 2048*4:REM Rom is only 8 bits in every 32
+  470
+  480 REM blank DIMmed memory, unused pages will take less time
+  490 A%=rom%
+  500 B%=rom%+RomSize%
+  510 C%=&ffffffff
+  520 CALL fillmem
+  530
+  540 *.
+  550 INPUT"Rom Filename",RomName$
+  560 OSCLI("LOAD "+RomName$+" "+STR$~rom%)
+  570 INPUT"Press Return to start programming ",Q$
+  580 PRINT"Chip ID",~FNreadid(0)
+  590
+  600 PRINT"Erasing ";
+  610 IF FullRamSize%=RomKB% THEN
+  620   PRINT" - chip"
+  630   PROCerase(&5555,&10)
+  640 ELSE
+  650   PRINT" - sectors"
+  660   FOR r%=0 TO (RomKB%-1) STEP 4:REM 4K pages in Flash
+  670     PROCerase(r%*1024,&30)
+  680   NEXT
+  690 ENDIF
+  700 PRINT
+  710
+  720 PRINT"Checking Erased ";
+  730 err%=0
+  740 FOR r%=0 TO (RomKB%-1) STEP 4
+  750 val%=FNfread(r%*1024)
+  760 IF val%=&ff THEN
+  770   PRINT".";
+  780 ELSE
+  790   PRINT"X";
+  800   err%+=1
+  810 ENDIF
+  820 NEXT
+  830 PRINT
+  840 IF err% <> 0 THEN
+  850   PRINT "Error erasing chip",err%
+  860   EXIT
+  870 ENDIF
+  880 PRINT"Writing whole ROM"
+  890 st%=TIME
+  900 FOR s%=0 TO (RomKB%-1)
+  910 PRINT".";
+  920 addr%=(s%*1024)
+  930 PROCwritebytes(addr%,rom%+addr%,1024)
+  940 NEXT
+  950 ed% = TIME
+  960 PRINT
+  970 PRINT "TIME = ",(ed%-st%)/100;"S"
+  980
+  990 END
+ 1000
+ 1010DEF PROCwritebytes(addr%,value%,num%)
+ 1020A%=Offset%
+ 1030B%=Latch%
+ 1040C%=addr%
+ 1050D%=value%
+ 1060E%=num%
+ 1070REM PRINT "A%",~A%," B%",~B%," C%",~C%," D%",~D%
+ 1080CALL writeb
+ 1090ENDPROC
+ 1100
+ 1110DEF PROCflash(addr%,value%)
+ 1120A%=Offset%
+ 1130B%=Latch%
+ 1140C%=addr%
+ 1150D%=value%
+ 1160REM PRINT "A%",~A%," B%",~B%," C%",~C%," D%",~D%
+ 1170CALL begin
+ 1180ENDPROC
+ 1190
+ 1200 DEF PROCflasseq(val%)
+ 1210 PROCflash(&5555,&aa)
+ 1220 PROCflash(&2aaa,&55)
+ 1230 PROCflash(&5555,val%)
+ 1240 ENDPROC
+ 1250
+ 1260 DEF FNfread(addr%)
+ 1270 A%=Offset%
+ 1280 B%=Latch%
+ 1290 C%=addr%
+ 1300 REM PRINT "A%",~A%," B%",~B%," C%",~C%," D%",~D%
+ 1310 val%=USR(readval)
+ 1320=val%
+ 1330
+ 1340 DEF PROCerase(addr%,val%)
+ 1350 PRINT"Erasing @ &";~addr%;" ";
+ 1360 PROCflasseq(&80):REM start sector erase
+ 1370 PROCflash(&5555,&aa)
+ 1380 PROCflash(&2aaa,&55)
+ 1390 PROCflash(addr%,val%)
+ 1400 REM Wait for sector erase to finish
+ 1410 n%=0
+ 1420 st%=TIME
+ 1430 REPEAT
+ 1440 val%=FNfread(addr%)
+ 1450 REM PRINT".";
+ 1460 n%+=1
+ 1470 UNTIL (val%=&FF) OR ((TIME-st%)>1000)
+ 1480 PRINT n%,"TIME = ";(TIME-st%)/100;"S"
+ 1490 ENDPROC
+ 1500
+ 1510 DEF FNreadid(n%)
+ 1520 PROCflasseq(&90)
+ 1530 ID0%=FNfread(0)
+ 1540 ID1%=FNfread(1)
+ 1550 PROCflash(&5555,&f0):REM exit chip id mode
+ 1560=(ID0%*256)+ID1%
+ 1570
+ 1580DEF PROCassemble
+ 1590DIM code% 1000
+ 1600FOR pass%=0 TO 2 STEP 2
+ 1610P%=code%
+ 1620[OPT pass%
+ 1630.begin
+ 1640SWI "OS_EnterOS"
+ 1650
+ 1660;R0 - Base Address or ROM/Flash
+ 1670;R1 - Latch
+ 1680;R2 - Address in Flash
+ 1690;R3 - Value
+ 1700
+ 1710;Calc page
+ 1720MOV R4,R2,LSR #11 ; 2K window = 11 bits
+ 1730
+ 1740;Calc address in window
+ 1750REM MOV R6,#&800
+ 1760REM SUB R6,R6,#1 ; R6 = Mask = &7ff
+ 1770LDR R6,flashmask
+ 1780AND R5,R2,R6
+ 1790MOV R5,R5,LSL #2 ; *4 - Rom A0 = Arc LA2
+ 1800
+ 1810STRB R4,[R1] ; Set Latch
+ 1820STRB R3,[R0,R5] ; Write value
+ 1830
+ 1840.exit
+ 1850TEQP pc,#0
+ 1860MOV R0,R0
+ 1870
+ 1880MOVS PC,R14
+ 1890
+ 1900.readval
+ 1910SWI "OS_EnterOS"
+ 1920
+ 1930;R0 - Base Address or ROM/Flash
+ 1940;R1 - Latch
+ 1950;R2 - Address in Flash
+ 1960;return value in R0
+ 1970
+ 1980;Calc page
+ 1990MOV R4,R2,LSR #11 ; 2K window = 11 bits
+ 2000
+ 2010;Calc address in window
+ 2020REM MOV R6,#&800
+ 2030REM SUB R6,R6,#1 ; R6 = Mask = &7ff
+ 2040LDR R6,flashmask
+ 2050AND R5,R2,R6
+ 2060MOV R5,R5,LSL #2 ; *4 - Rom A0 = Arc LA2
+ 2070
+ 2080STRB R4,[R1] ; Set Latch
+ 2090LDRB R0,[R0,R5] ; Write value
+ 2100
+ 2110TEQP pc,#0
+ 2120MOV R0,R0
+ 2130
+ 2140MOVS PC,R14
+ 2150
+ 2160
+ 2170.writeb
+ 2180SWI "OS_EnterOS"
+ 2190
+ 2200;R0 - Base Address or ROM/Flash
+ 2210;R1 - Latch
+ 2220;R2 - Address in Flash
+ 2230;R3 - Address of Value
+ 2240;R4 - Number of bytes to program
+ 2250
+ 2260.writeloop
+ 2270;Calc address in window
+ 2280;MOV R6,#&800
+ 2290;SUB R6,R6,#1 ; R6 = Mask = &7ff
+ 2300LDR R6,flashmask
+ 2310AND R5,R2,R6
+ 2320MOV R5,R5,LSL #2 ; Rom A0 = Arc LA2
+ 2330
+ 2340;&aa
+ 2350MOV R7,#&a ; page &a
+ 2360STRB R7,[R1] ; Set latch
+ 2370LDR R7,val5555
+ 2380MOV R8,#&aa
+ 2390STRB R8,[R0,R7]
+ 2400;&55
+ 2410MOV R7,#&5 ; page
+ 2420STRB R7,[R1] ; Set latch
+ 2430LDR R7,val2aaa
+ 2440MOV R8,#&55
+ 2450STRB R8,[R0,R7]
+ 2460;&a0
+ 2470MOV R7,#&a ; page
+ 2480STRB R7,[R1] ; Set latch
+ 2490LDR R7,val5555
+ 2500MOV R8,#&a0
+ 2510STRB R8,[R0,R7]
+ 2520
+ 2530;Calc page
+ 2540MOV R9,R2,LSR #11 ; 2K window = 11 bits
+ 2550STRB R9,[R1] ; Set Latch
+ 2560LDRB R9,[R3],#1 ; Read byte to program
+ 2570STRB R9,[R0,R5] ; Write value
+ 2580
+ 2590MOV R8,#&ff
+ 2600.waitp ; Wait for byte to be programmed
+ 2610SUBS R8,R8,#1
+ 2620BEQ abortwrite
+ 2630LDRB R7,[R0,R5]
+ 2640CMP R7,R9
+ 2650BNE waitp
+ 2660.abortwrite
+ 2670
+ 2680ADD R2,R2,#1 ; Increment address to program
+ 2690SUBS R4,R4,#1
+ 2700BNE writeloop
+ 2710
+ 2720
+ 2730.exit2
+ 2740TEQP pc,#0
+ 2750MOV R0,R0
+ 2760
+ 2770MOVS PC,R14
+ 2780
+ 2790 .fillRND
+ 2800 ;MOV R4,#2 ; Seed (now using R2, passed in)
+ 2810 .rndloop
+ 2820 STR R2,[R0],#4
+ 2830 ADD R2,R2,R2,ROR#1
+ 2840 CMP R0,R1
+ 2850 BNE rndloop
+ 2860 MOV PC,R14
+ 2870
+ 2880 .fillmem
+ 2890 ;MOV R4,#2 ; Seed (now using R2, passed in)
+ 2900 ;MVN R2,-1
+ 2910 .FFloop
+ 2920 STR R2,[R0],#4
+ 2930 ;ADD R2,R2,R2,ROR#1
+ 2940 CMP R0,R1
+ 2950 BNE FFloop
+ 2960 MOV PC,R14
+ 2970
+ 2980.val5555
+ 2990EQUD &1554
+ 3000.val2aaa
+ 3010EQUD &aa8
+ 3020.flashmask
+ 3030EQUD &7ff
+ 3040]
+ 3050NEXT pass%
+ 3060ENDPROC
